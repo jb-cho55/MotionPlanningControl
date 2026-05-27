@@ -1,0 +1,50 @@
+[project]
+name = "ivs-planning-control"
+version = "0.0.0"
+description = "Internal — IVS planning & control teaching repo (not distributed)"
+requires-python = "==3.14.*"
+dependencies = [
+    "numpy>=1.24",
+    "plotly>=5",
+    "pytest>=7",
+    "rerun-sdk>=0.32.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.4",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# 메타데이터(의존성)만 담는 빈 패키지 — 실제 코드는 01_Python_project_refactored/ 트리에 있음
+packages = []
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+extend-exclude = [
+    "00_LectureNote",
+    "01_Python_project",
+    "02_Carmker_project",
+    "03_Matlab_project",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E741"]  # 단일문자 변수명 허용 (수식 표기)
+
+[tool.pytest.ini_options]
+# Plain `pytest` = 운영자 회귀 검증 (solutions 만). release 는 항상 path 명시
+# (학생 README / dev_workflow.md 가 path 명시 패턴 강제). 동일 path 안에는
+# 같은 이름 test 파일이 없어 module 충돌 발생 안 함 — solutions 와 release
+# 동시 호출 시에만 충돌하는데 그건 의도된 워크플로우가 아님.
+#
+# 단, per-problem 사본 모듈 (예: lateral_pipeline) 의 test 는 폴더별 basename 충돌
+# 회피 위해 `test_<module>_<problem>.py` 패턴 사용 (예: test_lateral_pipeline_06.py).
+testpaths = ["01_Python_project_refactored/solutions"]
+addopts = "-q --tb=short"
+filterwarnings = ["ignore::DeprecationWarning"]

@@ -1,0 +1,48 @@
+# OMC workspace
+.omc/
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Build artifacts
+build/
+dist/
+*.obj
+*.o
+*.exe
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# CarMaker / Simulink build & sim outputs
+**/slprj/
+**/SimOutput/
+**/Movie/
+*.slxc
+*.slx.autosave
+*.slx.autosave.zip
+*.slx.r20*
+
+# CarMaker temp files (호스트명/사용자명 노출 방지)
+**/.tmp_*
+
+# CarMaker 14.0.1 update backups (2025-05-08) — kept locally, not in git
+*_20250508_0051.*
+*_20250508_0051
+
+# 임시/덤프 파일
+/y
+/pdf_dump.txt
+/pdf_p25.png
+/pdf_p26.png
