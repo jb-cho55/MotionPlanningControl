@@ -20,8 +20,14 @@ if ~exist(figs, 'dir'); mkdir(figs); end
 c = map_const();
 
 % --- Scenario inputs ---
-ego = [0; -20; 0; 0];                 % x, y, yaw, v
-t00 = [76.1; -5; pi/2];
+% Ego starts slightly inside the parking lot so the road-edge inflation
+% (ego_w/2 + safety = 1.75 m) does not flag the spawn cell as occupied.
+% CarMaker TestRun still spawns at (0, -20); whether to move that too is
+% a separate scenario decision.
+ego = [2; -20; 0; 0];                 % x, y, yaw, v
+% Goal box rear bumper (now shifted 1 m inside the parking lot so the
+% full 6 m box stays clear of the y=0 road edge).
+t00 = [76.1; -6; pi/2];
 trucks_deg = [40 -12  90;
               40 -24  90;
               40 -36  90;

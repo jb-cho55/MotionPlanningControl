@@ -111,16 +111,65 @@ end
 
 base_map = zeros(N, N, 'uint8');
 
+% Drivable margin: ego must stay this far inside the polygon boundary
+% so that the ego footprint never crosses the road edge.  Same inflation
+% as add_obstacle uses for trucks.
+inflate_m = c.EGO_W * 0.5 + c.SAFETY_MARGIN;
+
 for row = 1:N
     wy = y_max - (double(row) - 0.5) * res;
     for col = 1:N
         wx = x_min + (double(col) - 0.5) * res;
         if ~point_in_polygon(wx, wy, bx, by, M)
             base_map(row, col) = uint8(1);
+        else
+            % Inside the polygon — but reject cells whose distance to ANY
+            % polygon edge is less than the inflation radius.  This carves
+            % a buffer along the road perimeter so the planner never
+            % places the ego center within inflate_m of the edge.
+            if dist_to_polygon_edge(wx, wy, bx, by, M) < inflate_m
+                base_map(row, col) = uint8(1);
+            end
         end
     end
 end
 
+end
+
+function d_min = dist_to_polygon_edge(px, py, bx, by, M)
+%#codegen
+d_min = 1.0e9;
+j = double(M);
+for i = 1:double(M)
+    d_seg = point_to_segment(px, py, bx(j), by(j), bx(i), by(i));
+    if d_seg < d_min
+        d_min = d_seg;
+    end
+    j = i;
+end
+end
+
+function d = point_to_segment(px, py, ax, ay, qx, qy)
+%#codegen
+% Distance from point (px,py) to line segment (ax,ay)-(qx,qy).
+vx = qx - ax;
+vy = qy - ay;
+wx = px - ax;
+wy = py - ay;
+v2 = vx*vx + vy*vy;
+if v2 < 1.0e-9
+    d = hypot(px - ax, py - ay);
+    return;
+end
+t = (wx*vx + wy*vy) / v2;
+if t < 0.0
+    t = 0.0;
+elseif t > 1.0
+    t = 1.0;
+end
+cx = ax + t * vx;
+cy = ay + t * vy;
+d = hypot(px - cx, py - cy);
 end
 
 function inside = point_in_polygon(px, py, bx, by, M)
