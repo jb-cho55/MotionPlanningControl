@@ -34,7 +34,15 @@ c.EGO_W    = 1.9;
 c.EGO_L    = 4.7;
 c.WHEELBASE = 2.8;
 
-% Safety margin added to obstacle half-width / half-length
-c.SAFETY_MARGIN = 0.3;
+% Safety margin added to obstacle half-width / half-length.
+% Increased from 0.3 m so the ego body clears truck edges by ~0.8 m
+% (covers Pure Pursuit tracking error + vehicle dynamics lag).
+c.SAFETY_MARGIN = 0.8;
+
+% Clearance shaping (used by hybrid_astar_plan with compute_clearance).
+% Cells closer than CLEAR_MAX to an obstacle accrue extra step cost so the
+% planner pulls the path toward the middle of the corridor.
+c.CLEAR_MAX = 3.0;          % m — beyond this, no penalty
+c.W_CLEAR   = 1.2;          % step-cost weight per m of clearance deficit
 
 end

@@ -49,11 +49,19 @@ YAW_TOL  = 0.45;
 W_HEUR   = 1.3;                % weighted A* gain on grid+yaw heuristic
 W_YAW    = 1.0;
 
-% Pre-bake the obstacle-aware grid heuristic (8-connected free-space
-% distance from each cell to the goal cell).  This is the "Hybrid A*
-% with grid Dijkstra heuristic" pattern — without it, the Euclidean
-% heuristic gets fooled by the L-shaped truck wall in Day4_5.
-h_grid = compute_grid_heuristic(occ_map, gx, gy);
+% Pre-bake two grids:
+%   h_grid     : obstacle-aware admissible heuristic (free-space distance
+%                from each cell to the goal cell).
+%   clear_map  : distance transform — for each cell, the distance to the
+%                nearest occupied cell.  Used to shape step_cost so the
+%                planner pulls the path toward the corridor centre rather
+%                than hugging the inflated obstacle edge.
+h_grid    = compute_grid_heuristic(occ_map, gx, gy);
+clear_map = compute_clearance(occ_map);
+
+clear_const = map_const();
+CLEAR_MAX = clear_const.CLEAR_MAX;
+W_CLEAR   = clear_const.W_CLEAR;
 
 path_x   = zeros(1, MAX_PATH);
 path_y   = zeros(1, MAX_PATH);
@@ -150,6 +158,11 @@ for iter = 1:MAX_NODES
         step_cost = STEP_DIST * (1.0 + 0.2 * abs(delta));
         if dir_a ~= ndir(cur)
             step_cost = step_cost + SWITCH_PENALTY;
+        end
+        % Clearance shaping: pay extra when close to an obstacle.
+        clr = lookup_h(nx_n, ny_n, clear_map);
+        if clr < CLEAR_MAX
+            step_cost = step_cost + W_CLEAR * (CLEAR_MAX - clr);
         end
         new_g = ng(cur) + step_cost;
         h_grid_n = lookup_h(nx_n, ny_n, h_grid);
