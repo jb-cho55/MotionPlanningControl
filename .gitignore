@@ -46,3 +46,6 @@ __pycache__/
 /pdf_dump.txt
 /pdf_p25.png
 /pdf_p26.png
+
+# 실습 자료 PDF (로컬 보존, git 트래킹 제외)
+*.pdf
