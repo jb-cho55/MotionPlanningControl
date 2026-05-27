@@ -43,10 +43,11 @@ MAX_PATH = int32(300);
 N_OCC = int32(200);
 REPLAN_PERIOD = int32(300);   % 3 s @ 100 Hz
 
-persistent path_x path_y path_len occ_cached tick last_gx last_gy init
+persistent path_x path_y path_yaw path_len occ_cached tick last_gx last_gy init
 if isempty(init)
     path_x = zeros(MAX_PATH, 1);
     path_y = zeros(MAX_PATH, 1);
+    path_yaw = zeros(MAX_PATH, 1);
     path_len = int32(0);
     occ_cached = zeros(N_OCC, N_OCC, 'uint8');
     tick = int32(REPLAN_PERIOD + 1);     % force first plan
@@ -71,13 +72,13 @@ end
 if need_replan
     base_map = generate_map(map_boundary);
     occ      = add_obstacle(base_map, traffic_info, traffic_size);
-    [px, py, ~, plen] = hybrid_astar_plan(ego_x, ego_y, ego_yaw, ...
-                                           t00_x, t00_y, t00_yaw, occ);
+    [px, py, pyaw, plen] = hybrid_astar_plan(ego_x, ego_y, ego_yaw, ...
+                                              t00_x, t00_y, t00_yaw, occ);
     if plen >= int32(2)
-        % Reshape px/py (which planner returns as 1x300) to 300x1.
         for i = int32(1):MAX_PATH
-            path_x(i) = px(i);
-            path_y(i) = py(i);
+            path_x(i)   = px(i);
+            path_y(i)   = py(i);
+            path_yaw(i) = pyaw(i);
         end
         path_len = plen;
         occ_cached = occ;
@@ -85,19 +86,15 @@ if need_replan
         last_gx = t00_x;
         last_gy = t00_y;
     elseif path_len < int32(2)
-        % First-time failure: stay-put 2-point path so the controller
-        % has SOMETHING to keep ego at rest.
         path_x(:) = 0.0;
         path_y(:) = 0.0;
-        path_x(1) = ego_x;
-        path_y(1) = ego_y;
-        path_x(2) = ego_x;
-        path_y(2) = ego_y;
+        path_yaw(:) = 0.0;
+        path_x(1) = ego_x;   path_y(1) = ego_y;   path_yaw(1) = ego_yaw;
+        path_x(2) = ego_x;   path_y(2) = ego_y;   path_yaw(2) = ego_yaw;
         path_len = int32(2);
         occ_cached = occ;
         tick = int32(0);
     end
-    % Otherwise keep the previous valid path.
 end
 tick = tick + int32(1);
 
@@ -114,7 +111,10 @@ else
 end
 
 % --- Controllers ---
-steer_cmd  = pure_pursuit(ego_x, ego_y, ego_yaw, ego_v, path_x, path_y, path_len);
+% Stanley needs path_yaw and the goal_yaw fallback to align the ego at
+% the parking heading instead of drifting past T00 with arbitrary yaw.
+steer_cmd  = stanley(ego_x, ego_y, ego_yaw, ego_v, ...
+                     path_x, path_y, path_yaw, path_len, t00_yaw);
 desired_ax = pd_speed(v_des, ego_v);
 
 steer_fl = steer_cmd;
