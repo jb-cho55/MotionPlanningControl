@@ -115,6 +115,12 @@ clean_T00 = (occ4(r0, c0) == 0);
 fprintf('  cell @ T00 (76.1,-5) -> row=%d col=%d occ=%d  [%s]\n', ...
     r0, c0, occ4(r0, c0), ternary(clean_T00, 'OK', 'FAIL'));
 
+%% --- Case 5b: flat interleaved boundary (matches .slx Mux output) ---
+flat_boundary = [x_min; y_min; x_max; y_min; x_max; y_max; x_min; y_max];
+base_flat = generate_map(flat_boundary);
+ok_flat = (sum(base_flat(:) > 0) == 0);
+fprintf('Case 5b (flat 8x1 boundary): free baseline [%s]\n', ternary(ok_flat, 'OK', 'FAIL'));
+
 %% --- Case 5: shrunken polygon -> walls show up in occupancy ---
 % Drivable area = rectangle inset by 10 m on each side.  Outside should be 1.
 inset = [10 -90; 90 -90; 90 -10; 10 -10];
@@ -173,7 +179,7 @@ fprintf('Saved figs/add_obstacle_single.png\n');
 fprintf('Saved figs/add_obstacle_scenario1.png\n');
 
 %% --- Summary ---
-all_ok = okA && okA2 && ok1 && ok2 && ok3 && ok4 && clean_T00 && ok5;
+all_ok = okA && okA2 && ok1 && ok2 && ok3 && ok4 && clean_T00 && ok5 && ok_flat;
 fprintf('\n--- RESULT: %s ---\n', ternary(all_ok, 'ALL PASS', 'FAIL'));
 if ~all_ok
     error('test_add_obstacle: one or more cases failed.');

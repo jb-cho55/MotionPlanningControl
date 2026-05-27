@@ -33,22 +33,41 @@ y_max = c.Y_MAX;
 
 MAX_BOUND = int32(16);
 
-% Normalise map_boundary to Mx2.
-if size(map_boundary, 2) == 2
-    M = int32(size(map_boundary, 1));
-    bx = map_boundary(:, 1);
-    by = map_boundary(:, 2);
-elseif size(map_boundary, 1) == 2
-    M = int32(size(map_boundary, 2));
-    bx = map_boundary(1, :).';
-    by = map_boundary(2, :).';
-else
-    M = int32(0);
-    bx = zeros(MAX_BOUND, 1);
-    by = zeros(MAX_BOUND, 1);
-end
-if M > MAX_BOUND
-    M = MAX_BOUND;
+% Always work on fixed-size buffers (codegen-friendly).  Accepts:
+%   - Mx2 [x y] rows
+%   - 2xM [x; y] columns
+%   - flat (2M)x1 or 1x(2M) interleaved [x1; y1; x2; y2; ...]
+%     (this is what .slx's stacked Mux blocks usually produce)
+bx = zeros(MAX_BOUND, 1);
+by = zeros(MAX_BOUND, 1);
+M  = int32(0);
+
+ne = int32(numel(map_boundary));
+r  = int32(size(map_boundary, 1));
+co = int32(size(map_boundary, 2));
+
+if co == int32(2) && r >= int32(3)
+    M = r;
+    if M > MAX_BOUND; M = MAX_BOUND; end
+    for i = int32(1):M
+        bx(i) = map_boundary(i, 1);
+        by(i) = map_boundary(i, 2);
+    end
+elseif r == int32(2) && co >= int32(3)
+    M = co;
+    if M > MAX_BOUND; M = MAX_BOUND; end
+    for i = int32(1):M
+        bx(i) = map_boundary(1, i);
+        by(i) = map_boundary(2, i);
+    end
+elseif ne >= int32(6) && mod(double(ne), 2) == 0
+    M = ne / int32(2);
+    if M > MAX_BOUND; M = MAX_BOUND; end
+    flat = map_boundary(:);
+    for i = int32(1):M
+        bx(i) = flat(2*i - 1);
+        by(i) = flat(2*i);
+    end
 end
 
 % Default to "all occupied" if polygon is degenerate.
