@@ -177,7 +177,11 @@ for iter = 1:MAX_NODES
 
         [nx_n, ny_n, nyaw_n] = bicycle_step(cx, cy, cyaw, delta, ds, WHEELBASE);
 
-        if is_collision_segment(cx, cy, nx_n, ny_n, occ_map)
+        % Skip collision check when expanding from the very first node
+        % (the start state) — CarMaker spawns ego on the road edge,
+        % which falls inside the road-inflation buffer.  The planner
+        % must be allowed to escape that initial cell.
+        if cur ~= int32(1) && is_collision_segment(cx, cy, nx_n, ny_n, occ_map)
             continue;
         end
 
