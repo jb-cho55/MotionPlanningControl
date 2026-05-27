@@ -177,11 +177,13 @@ for iter = 1:MAX_NODES
 
         [nx_n, ny_n, nyaw_n] = bicycle_step(cx, cy, cyaw, delta, ds, WHEELBASE);
 
-        % Skip collision check when expanding from the very first node
-        % (the start state) — CarMaker spawns ego on the road edge,
-        % which falls inside the road-inflation buffer.  The planner
-        % must be allowed to escape that initial cell.
-        if cur ~= int32(1) && is_collision_segment(cx, cy, nx_n, ny_n, occ_map)
+        % Skip collision check for nodes within a 5 m "start bubble" so
+        % the planner can escape an ego that was spawned on the road
+        % inflation buffer (CarMaker's TestRun puts the ego at (0,-20),
+        % which is right on the inflated y=0 edge).  Outside the bubble
+        % every other obstacle is still respected.
+        in_start_bubble = (hypot(cx - sx, cy - sy) < 5.0);
+        if ~in_start_bubble && is_collision_segment(cx, cy, nx_n, ny_n, occ_map)
             continue;
         end
 
@@ -210,8 +212,12 @@ for iter = 1:MAX_NODES
         new_g = ng(cur) + step_cost;
         h_grid_n = lookup_h(nx_n, ny_n, h_grid);
         if h_grid_n >= 1.0e9
-            % Cell unreachable on grid -> skip (would mislead the search).
-            continue;
+            % Cell unreachable on the obstacle-aware Dijkstra grid (e.g.
+            % the ego just spawned inside the road-inflation buffer).
+            % Fall back to Euclidean so the search can still escape;
+            % once the ego exits the buffer the grid heuristic takes
+            % over and obstacle-aware guidance resumes.
+            h_grid_n = hypot(gx - nx_n, gy - ny_n);
         end
         h = h_grid_n + W_YAW * abs(angle_diff(gyaw, nyaw_n));
         new_f = new_g + W_HEUR * h;
