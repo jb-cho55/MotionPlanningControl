@@ -49,7 +49,7 @@ map_boundary = [c.X_MIN c.Y_MIN;
 
 % --- Sim params ---
 DT = 0.01;     % 100 Hz in this .m harness (CarMaker .slx uses 1 kHz)
-T  = 60.0;     % balance: long enough to reach T00, short enough to iterate
+T  = 90.0;     % long enough for the L-detour + endgame approach
 N  = round(T / DT);
 TAU  = 1.0;    % 1st-order vehicle lag
 DRAG = 0.05;

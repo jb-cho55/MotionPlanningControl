@@ -102,13 +102,19 @@ end
 tick = tick + int32(1);
 
 % --- Speed reference ---
+% Trigger v_des=0 only when ego is *inside* the goal box (the planner
+% guarantees this is collision-free).  Up to that point we crawl at low
+% speed so the controller can finish the alignment Stanley + RS-shot
+% prescribed.
 d_goal = hypot(t00_x - ego_x, t00_y - ego_y);
 if d_goal > 15.0
     v_des = 3.0;
 elseif d_goal > 6.0
     v_des = 1.6;
-elseif d_goal > 2.0
+elseif d_goal > 1.5
     v_des = 0.8;
+elseif d_goal > 0.4
+    v_des = 0.3;       % final crawl through the box mouth
 else
     v_des = 0.0;
 end

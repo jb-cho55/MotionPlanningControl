@@ -106,6 +106,12 @@ ky(1) = int32(round(sy / POS_RES));
 kw(1) = int32(round(wrap_2pi(sy_w) / YAW_RES));
 
 goal_idx = int32(0);
+rs_attached = false;
+rs_px   = zeros(1, MAX_PATH);
+rs_py   = zeros(1, MAX_PATH);
+rs_pyaw = zeros(1, MAX_PATH);
+rs_pdir = zeros(1, MAX_PATH, 'int8');
+rs_plen = int32(0);
 
 for iter = 1:MAX_NODES
     % Pop best open node (linear scan — codegen-friendly).
@@ -132,6 +138,30 @@ for iter = 1:MAX_NODES
                         BOX_L, BOX_W, BOX_TOL, EGO_L, EGO_W)
         goal_idx = cur;
         break;
+    end
+
+    % Reeds-Shepp analytic shot: only attempt close to the goal (≤ 15 m)
+    % so we don't spend time on long, loopy patterns while still in the
+    % cruise phase.  Also reject patterns whose total length is more
+    % than 2x the straight-line distance — those introduce unnecessary
+    % loops the controller can't follow.
+    d_to_goal = hypot(gx - cx, gy - cy);
+    if d_to_goal < 15.0
+        R = WHEELBASE / tan(0.5);
+        [rs_px, rs_py, rs_pyaw, rs_pdir, rs_plen, rs_ok] = ...
+            rs_shot(cx, cy, cyaw, gx, gy, gyaw, occ_map, R, STEP_DIST);
+        if rs_ok && rs_plen >= int32(2)
+            % Estimate curve length by summing inter-sample distances.
+            rs_len = 0.0;
+            for k = int32(2):rs_plen
+                rs_len = rs_len + hypot(rs_px(k) - rs_px(k-1), rs_py(k) - rs_py(k-1));
+            end
+            if rs_len < 2.0 * max(d_to_goal, 1.0)
+                goal_idx = cur;
+                rs_attached = true;
+                break;
+            end
+        end
     end
 
     for a = int32(1):N_ACTION
@@ -241,6 +271,21 @@ for k = int32(1):cnt
     path_dir(k) = tmp_dir(src);
 end
 path_len = cnt;
+
+% If an RS analytic shot was attached to `cur`, splice its samples onto
+% the path tail (skip the first one — it duplicates the last graph node).
+if rs_attached && rs_plen >= int32(2)
+    for k = int32(2):rs_plen
+        if path_len >= MAX_PATH
+            break;
+        end
+        path_len = path_len + int32(1);
+        path_x(path_len)   = rs_px(k);
+        path_y(path_len)   = rs_py(k);
+        path_yaw(path_len) = rs_pyaw(k);
+        path_dir(path_len) = rs_pdir(k);
+    end
+end
 
 end
 
