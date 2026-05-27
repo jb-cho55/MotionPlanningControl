@@ -45,4 +45,16 @@ c.SAFETY_MARGIN = 0.8;
 c.CLEAR_MAX = 3.0;          % m — beyond this, no penalty
 c.W_CLEAR   = 1.2;          % step-cost weight per m of clearance deficit
 
+% Goal box (parking slot).  Defined in the same convention as traffic
+% vehicles: (bx, by, byaw) is the REAR BUMPER CENTER of the slot, and the
+% slot extends +x_local for PARK_BOX_L meters with width PARK_BOX_W.
+% Hybrid A* terminates when all four ego corners fall inside this box
+% (in the box-local frame) — this implicitly forces yaw alignment.
+% Box widened from the initial 5.5x2.5 to 6.0x3.0 so the 4-corner
+% containment test gives the planner enough room to settle into the
+% slot (effective ego-center tolerance ~0.66 m x 0.56 m vs ~0.41 x 0.31).
+c.PARK_BOX_L = 6.0;         % m (ego length 4.68 m + 0.66 m front + 0.66 m rear)
+c.PARK_BOX_W = 3.0;         % m (ego width  1.88 m + 0.56 m each side)
+c.PARK_TOL   = 0.05;        % m of slack added to each box edge for numerics
+
 end

@@ -44,10 +44,10 @@ STEERS = [-0.50, -0.32, -0.16, 0.0, 0.16, 0.32, 0.50];
 SWITCH_PENALTY = 4.0;          % direction reversal cost
 POS_RES = 0.5;
 YAW_RES = pi / 12.0;
-GOAL_TOL = 1.5;
-YAW_TOL  = 0.45;
 W_HEUR   = 1.3;                % weighted A* gain on grid+yaw heuristic
 W_YAW    = 1.0;
+% Note: legacy GOAL_TOL/YAW_TOL replaced by goal-box containment check
+%       (pose_in_goal_box), so they no longer appear here.
 
 % Pre-bake two grids:
 %   h_grid     : obstacle-aware admissible heuristic (free-space distance
@@ -59,9 +59,14 @@ W_YAW    = 1.0;
 h_grid    = compute_grid_heuristic(occ_map, gx, gy);
 clear_map = compute_clearance(occ_map);
 
-clear_const = map_const();
-CLEAR_MAX = clear_const.CLEAR_MAX;
-W_CLEAR   = clear_const.W_CLEAR;
+shared = map_const();
+CLEAR_MAX = shared.CLEAR_MAX;
+W_CLEAR   = shared.W_CLEAR;
+BOX_L     = shared.PARK_BOX_L;
+BOX_W     = shared.PARK_BOX_W;
+BOX_TOL   = shared.PARK_TOL;
+EGO_L     = shared.EGO_L;
+EGO_W     = shared.EGO_W;
 
 path_x   = zeros(1, MAX_PATH);
 path_y   = zeros(1, MAX_PATH);
@@ -120,7 +125,10 @@ for iter = 1:MAX_NODES
 
     cx = nx(cur); cy = ny(cur); cyaw = nyaw(cur);
 
-    if hypot(gx - cx, gy - cy) < GOAL_TOL && abs(angle_diff(gyaw, cyaw)) < YAW_TOL
+    % Goal: all four ego corners must fall inside the goal box (box rear-
+    % bumper convention).  This forces both position AND yaw alignment.
+    if pose_in_goal_box(cx, cy, cyaw, gx, gy, gyaw, ...
+                        BOX_L, BOX_W, BOX_TOL, EGO_L, EGO_W)
         goal_idx = cur;
         break;
     end
@@ -234,18 +242,61 @@ end
 
 %% ===== helpers =====
 
+function inside = pose_in_goal_box(ex, ey, eyaw, bx, by, byaw, ...
+                                    box_l, box_w, box_tol, ego_l, ego_w)
+%#codegen
+% Goal box convention: (bx, by, byaw) is the REAR BUMPER CENTER of the
+% parking slot.  In box-local frame the slot occupies
+%   local_x in [-tol, box_l + tol],   local_y in [-(box_w/2 + tol), +(box_w/2 + tol)]
+% Ego convention: (ex, ey, eyaw) is also the REAR BUMPER CENTER of the
+% ego.  Ego corners in ego-local frame are
+%   (0, +ego_w/2)  (0, -ego_w/2)   (rear left, rear right)
+%   (ego_l, +ego_w/2)  (ego_l, -ego_w/2)   (front left, front right)
+% All four ego corners must lie inside the box.
+
+c_e = cos(eyaw); s_e = sin(eyaw);
+c_b = cos(byaw); s_b = sin(byaw);
+
+half_w = ego_w * 0.5;
+box_half_w = box_w * 0.5;
+
+cx_loc = [0.0,   0.0,   ego_l, ego_l];
+cy_loc = [+half_w, -half_w, +half_w, -half_w];
+
+inside = true;
+for k = 1:4
+    % Ego corner in global frame
+    gx_c = ex + c_e * cx_loc(k) - s_e * cy_loc(k);
+    gy_c = ey + s_e * cx_loc(k) + c_e * cy_loc(k);
+    % Transform into box-local frame
+    dx = gx_c - bx;
+    dy = gy_c - by;
+    lx =  c_b * dx + s_b * dy;
+    ly = -s_b * dx + c_b * dy;
+    if lx < -box_tol || lx > box_l + box_tol || ...
+       ly < -(box_half_w + box_tol) || ly > (box_half_w + box_tol)
+        inside = false;
+        return;
+    end
+end
+end
+
 function h = lookup_h(x, y, h_grid)
 %#codegen
-c = map_const();
-N = double(c.N);
-res = c.RES;
-if x < c.X_MIN || x > c.X_MAX || y < c.Y_MIN || y > c.Y_MAX
+% Constants inlined for speed.
+N_grid = 200;
+RES = 0.5;
+X_MIN = 0.0;
+X_MAX = 100.0;
+Y_MIN = -100.0;
+Y_MAX = 0.0;
+if x < X_MIN || x > X_MAX || y < Y_MIN || y > Y_MAX
     h = double(1.0e9);
     return;
 end
-col = floor((x - c.X_MIN) / res) + 1;
-row = floor((c.Y_MAX - y) / res) + 1;
-if row < 1 || row > N || col < 1 || col > N
+col = floor((x - X_MIN) / RES) + 1;
+row = floor((Y_MAX - y) / RES) + 1;
+if row < 1 || row > N_grid || col < 1 || col > N_grid
     h = double(1.0e9);
     return;
 end
@@ -285,21 +336,23 @@ end
 function occ = is_occupied_pose(x, y, occ_map)
 %#codegen
 % Simple cell lookup.  Ego footprint inflation is already baked into
-% occ_map by add_obstacle (margin = EGO_W/2 + SAFETY_MARGIN), so we
-% must NOT inflate again here — that would double-cover the buffer
-% and collapse legitimate corridors.
-c = map_const();
-N = double(c.N);
-res = c.RES;
+% occ_map by add_obstacle, so we must NOT inflate again here.
+% Constants inlined for speed (this is called ~10x per node expansion).
+N_grid = 200;
+RES = 0.5;
+X_MIN = 0.0;
+X_MAX = 100.0;
+Y_MIN = -100.0;
+Y_MAX = 0.0;
 
 occ = false;
-if x < c.X_MIN || x > c.X_MAX || y < c.Y_MIN || y > c.Y_MAX
+if x < X_MIN || x > X_MAX || y < Y_MIN || y > Y_MAX
     occ = true;
     return;
 end
-col = floor((x - c.X_MIN) / res) + 1;
-row = floor((c.Y_MAX - y) / res) + 1;
-if row < 1 || row > N || col < 1 || col > N
+col = floor((x - X_MIN) / RES) + 1;
+row = floor((Y_MAX - y) / RES) + 1;
+if row < 1 || row > N_grid || col < 1 || col > N_grid
     occ = true;
     return;
 end
