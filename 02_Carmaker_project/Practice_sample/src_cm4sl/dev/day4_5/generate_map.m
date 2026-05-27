@@ -76,6 +76,39 @@ if M < 3
     return;
 end
 
+% Sort vertices CCW around the centroid so the polygon is always simple
+% regardless of the order the caller (e.g. a .slx Mux block) provides.
+% Without this, swapping two vertices yields a self-intersecting
+% "bowtie" polygon and point-in-polygon misclassifies half the grid.
+cx_b = 0.0;
+cy_b = 0.0;
+for i = int32(1):M
+    cx_b = cx_b + bx(i);
+    cy_b = cy_b + by(i);
+end
+cx_b = cx_b / double(M);
+cy_b = cy_b / double(M);
+
+ang = zeros(MAX_BOUND, 1);
+for i = int32(1):M
+    ang(i) = atan2(by(i) - cy_b, bx(i) - cx_b);
+end
+
+% Selection sort (codegen-friendly, M is at most MAX_BOUND).
+for i = int32(1):M-int32(1)
+    min_k = i;
+    for j = i+int32(1):M
+        if ang(j) < ang(min_k)
+            min_k = j;
+        end
+    end
+    if min_k ~= i
+        tmp = ang(i);  ang(i) = ang(min_k);  ang(min_k) = tmp;
+        tmp = bx(i);   bx(i)  = bx(min_k);   bx(min_k)  = tmp;
+        tmp = by(i);   by(i)  = by(min_k);   by(min_k)  = tmp;
+    end
+end
+
 base_map = zeros(N, N, 'uint8');
 
 for row = 1:N

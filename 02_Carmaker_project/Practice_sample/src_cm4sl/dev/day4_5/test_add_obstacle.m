@@ -121,6 +121,14 @@ base_flat = generate_map(flat_boundary);
 ok_flat = (sum(base_flat(:) > 0) == 0);
 fprintf('Case 5b (flat 8x1 boundary): free baseline [%s]\n', ternary(ok_flat, 'OK', 'FAIL'));
 
+%% --- Case 5c: bowtie order (real .slx Mux order: TL, BL, TR, BR flat) ---
+% This is the order the actual Day4_5_Scenario_1.slx delivers.  Without
+% vertex sorting it traces an X-shape and half the grid is misclassified.
+bowtie = [0; 0; 0; -100; 100; 0; 100; -100];
+base_bow = generate_map(bowtie);
+ok_bow = (sum(base_bow(:) > 0) == 0);
+fprintf('Case 5c (bowtie order):    free baseline [%s]\n', ternary(ok_bow, 'OK', 'FAIL'));
+
 %% --- Case 5: shrunken polygon -> walls show up in occupancy ---
 % Drivable area = rectangle inset by 10 m on each side.  Outside should be 1.
 inset = [10 -90; 90 -90; 90 -10; 10 -10];
@@ -179,7 +187,7 @@ fprintf('Saved figs/add_obstacle_single.png\n');
 fprintf('Saved figs/add_obstacle_scenario1.png\n');
 
 %% --- Summary ---
-all_ok = okA && okA2 && ok1 && ok2 && ok3 && ok4 && clean_T00 && ok5 && ok_flat;
+all_ok = okA && okA2 && ok1 && ok2 && ok3 && ok4 && clean_T00 && ok5 && ok_flat && ok_bow;
 fprintf('\n--- RESULT: %s ---\n', ternary(all_ok, 'ALL PASS', 'FAIL'));
 if ~all_ok
     error('test_add_obstacle: one or more cases failed.');
