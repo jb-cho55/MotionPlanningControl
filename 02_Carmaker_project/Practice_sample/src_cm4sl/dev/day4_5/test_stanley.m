@@ -96,7 +96,9 @@ ego = [ego_x0; ego_y0; ego_yaw0];
 traj(1, :)  = ego.';
 yaw_log(1)  = ego(3);
 for k = 1:N
-    steer = stanley(ego(1), ego(2), ego(3), v, px, py, pyaw, plen, goal_yaw);
+    % All-forward direction for these synthetic reference paths.
+    pdir = ones(300, 1, 'int8');
+    steer = stanley(ego(1), ego(2), ego(3), v, px, py, pyaw, pdir, plen, goal_yaw);
     ego(1) = ego(1) + v * cos(ego(3)) * dt;
     ego(2) = ego(2) + v * sin(ego(3)) * dt;
     ego(3) = ego(3) + v * tan(steer) / L * dt;

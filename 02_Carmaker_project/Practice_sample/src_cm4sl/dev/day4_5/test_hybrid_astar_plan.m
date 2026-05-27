@@ -38,12 +38,12 @@ results = struct('name', {}, 'plen', {}, 'goal_err', {}, 'ok', {});
 
 %% --- Case A: short straight ---
 fprintf('=== Case A: free grid, short straight ===\n');
-[px, py, pyaw, plen] = hybrid_astar_plan(10, -50, 0, 25, -50, 0, occ_free);
+[px, py, pyaw, pdir, plen] = hybrid_astar_plan(10, -50, 0, 25, -50, 0, occ_free);
 results(end+1) = check_case('A_straight', px, py, pyaw, plen, 25, -50, 0, occ_free, GOAL_TOL, figs);
 
 %% --- Case B: 90 deg turn ---
 fprintf('\n=== Case B: free grid, 90-deg turn ===\n');
-[px, py, pyaw, plen] = hybrid_astar_plan(10, -50, 0, 30, -30, pi/2, occ_free);
+[px, py, pyaw, pdir, plen] = hybrid_astar_plan(10, -50, 0, 30, -30, pi/2, occ_free);
 results(end+1) = check_case('B_turn', px, py, pyaw, plen, 30, -30, pi/2, occ_free, GOAL_TOL, figs);
 
 %% --- Case C: pull into a parking slot from further away ---
@@ -51,7 +51,7 @@ results(end+1) = check_case('B_turn', px, py, pyaw, plen, 30, -30, pi/2, occ_fre
 % extends y in [-50, -44.5]).  Start further back to give the planner
 % room to swing in.
 fprintf('\n=== Case C: free grid, swing into parking slot with yaw alignment ===\n');
-[px, py, pyaw, plen] = hybrid_astar_plan(5, -60, 0, 30, -50, pi/2, occ_free);
+[px, py, pyaw, pdir, plen] = hybrid_astar_plan(5, -60, 0, 30, -50, pi/2, occ_free);
 results(end+1) = check_case('C_park_align', px, py, pyaw, plen, 30, -50, pi/2, occ_free, GOAL_TOL, figs);
 
 %% --- Case D: Day4_5 Scenario 1 full ---
@@ -71,11 +71,14 @@ for k = 1:7
 end
 occ_d = add_obstacle(base_free, info_d, traffic_size);
 % Goal option A: T00 rear bumper pose
-gx_d = 76.1; gy_d = -5; gyaw_d = pi/2;
-sx_d = 0;    sy_d = -20; syaw_d = 0;
+% Goal box rear bumper now at y=-6 (inside the inflated road buffer).
+gx_d = 76.1; gy_d = -6; gyaw_d = pi/2;
+% Ego spawn moved 2 m inside the lot so the road-edge inflation does not
+% reject the start node.
+sx_d = 2;    sy_d = -20; syaw_d = 0;
 fprintf('Planning %.1f -> %.1f (start (%g,%g,%g), goal (%g,%g,%g))\n', sx_d, gx_d, sx_d, sy_d, syaw_d, gx_d, gy_d, gyaw_d);
 tic;
-[px, py, pyaw, plen] = hybrid_astar_plan(sx_d, sy_d, syaw_d, gx_d, gy_d, gyaw_d, occ_d);
+[px, py, pyaw, pdir, plen] = hybrid_astar_plan(sx_d, sy_d, syaw_d, gx_d, gy_d, gyaw_d, occ_d);
 elapsed = toc;
 fprintf('Plan time: %.2f s, path_len = %d\n', elapsed, plen);
 results(end+1) = check_case('D_scenario1', px, py, pyaw, plen, gx_d, gy_d, gyaw_d, occ_d, GOAL_TOL, figs);

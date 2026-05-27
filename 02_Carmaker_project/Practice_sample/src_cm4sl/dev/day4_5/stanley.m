@@ -1,5 +1,6 @@
-function steer_cmd = stanley(ego_x, ego_y, ego_yaw, ego_v, ...
-                              path_x, path_y, path_yaw, path_len, goal_yaw)
+function [steer_cmd, dir_sign] = stanley(ego_x, ego_y, ego_yaw, ego_v, ...
+                                          path_x, path_y, path_yaw, path_dir, ...
+                                          path_len, goal_yaw)
 %STANLEY  Lateral controller (Stanley method) for Day4_5 path tracking.
 %
 %   steer_cmd = stanley(ego_x, ego_y, ego_yaw, ego_v, ...
@@ -51,6 +52,7 @@ V_SOFT      = 1.0;          % low-speed softening (m/s)
 END_RADIUS  = 3.0;          % blend to goal_yaw within this many meters
 
 steer_cmd = 0.0;
+dir_sign = int8(1);   % +1 forward, -1 reverse
 if path_len < int32(2)
     return;
 end
@@ -110,12 +112,23 @@ if end_dist < END_RADIUS
     alpha = 1.0 - end_dist / END_RADIUS;
     if alpha < 0.0; alpha = 0.0; end
     if alpha > 1.0; alpha = 1.0; end
-    % Slerp-like blend on circle.
     diff = wrap_pi(goal_yaw - path_heading);
     path_heading = wrap_pi(path_heading + alpha * diff);
 end
 
-heading_err = wrap_pi(path_heading - ego_yaw);
+% Direction of motion at the nearest path segment (+1 forward, -1 reverse).
+% In reverse, the bicycle model flips the relationship between steer and
+% turn direction, and the "heading" the ego must align is path_heading + pi
+% (ego rear bumper goes forward along path while its yaw points opposite).
+if numel(path_dir) >= double(nearest_idx)
+    dir_sign = int8(sign_default(path_dir(nearest_idx), int8(1)));
+end
+
+eff_heading = path_heading;
+if dir_sign == int8(-1)
+    eff_heading = wrap_pi(path_heading + pi);
+end
+heading_err = wrap_pi(eff_heading - ego_yaw);
 
 % --- 3. Cross-track error (signed, Stanley convention) ---
 % e_fa > 0 when the PATH is to the LEFT of the vehicle (so a positive
@@ -128,7 +141,17 @@ s_ph = sin(path_heading);
 cross_track =  s_ph * dx - c_ph * dy;
 
 % --- 4. Stanley law ---
-steer_cmd = heading_err + atan2(K_E * cross_track, V_SOFT + abs(ego_v));
+% In reverse, both terms have to flip sign: the steer-to-yaw kinematic
+% gain is inverted because the bicycle pivot is now ahead of the body,
+% and the cross-track correction must push the ego front the OTHER way.
+cross_track_eff = cross_track;
+if dir_sign == int8(-1)
+    cross_track_eff = -cross_track;
+end
+steer_cmd = heading_err + atan2(K_E * cross_track_eff, V_SOFT + abs(ego_v));
+if dir_sign == int8(-1)
+    steer_cmd = -steer_cmd;
+end
 
 % --- 5. Saturate ---
 if steer_cmd > MAX_STEER
@@ -148,4 +171,15 @@ function a = wrap_pi(a)
 %#codegen
 while a > pi;  a = a - 2.0 * pi; end
 while a < -pi; a = a + 2.0 * pi; end
+end
+
+function s = sign_default(v, fallback)
+%#codegen
+if v > 0
+    s = int8(1);
+elseif v < 0
+    s = int8(-1);
+else
+    s = fallback;
+end
 end

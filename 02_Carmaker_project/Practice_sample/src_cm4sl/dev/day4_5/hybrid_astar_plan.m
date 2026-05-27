@@ -1,4 +1,4 @@
-function [path_x, path_y, path_yaw, path_len] = hybrid_astar_plan( ...
+function [path_x, path_y, path_yaw, path_dir, path_len] = hybrid_astar_plan( ...
         sx, sy, syaw, gx, gy, gyaw, occ_map)
 %HYBRID_ASTAR_PLAN  From-scratch Hybrid A* planner for Day4_5 Scenario 1.
 %
@@ -71,6 +71,7 @@ EGO_W     = shared.EGO_W;
 path_x   = zeros(1, MAX_PATH);
 path_y   = zeros(1, MAX_PATH);
 path_yaw = zeros(1, MAX_PATH);
+path_dir = zeros(1, MAX_PATH, 'int8');   % +1 forward, -1 reverse per segment
 path_len = int32(0);
 
 % Node arrays (struct-of-arrays for codegen).
@@ -220,6 +221,7 @@ end
 tmp_x   = zeros(MAX_PATH, 1);
 tmp_y   = zeros(MAX_PATH, 1);
 tmp_yaw = zeros(MAX_PATH, 1);
+tmp_dir = zeros(MAX_PATH, 1, 'int8');
 cnt = int32(0);
 idx = goal_idx;
 while idx > int32(0) && cnt < MAX_PATH
@@ -227,6 +229,7 @@ while idx > int32(0) && cnt < MAX_PATH
     tmp_x(cnt)   = nx(idx);
     tmp_y(cnt)   = ny(idx);
     tmp_yaw(cnt) = nyaw(idx);
+    tmp_dir(cnt) = ndir(idx);
     idx = nparent(idx);
 end
 
@@ -235,6 +238,7 @@ for k = int32(1):cnt
     path_x(k)   = tmp_x(src);
     path_y(k)   = tmp_y(src);
     path_yaw(k) = tmp_yaw(src);
+    path_dir(k) = tmp_dir(src);
 end
 path_len = cnt;
 
