@@ -48,7 +48,13 @@ end
 % Constants for the grid (mirrors Parking.m map_const_local)
 N = 200; RES = 0.5;
 X_MIN = 0; X_MAX = 100; Y_MIN = -100; Y_MAX = 0;
-EGO_W = 1.9;
+EGO_W = 1.9; EGO_L = 4.7;
+
+% Goal parking box (mirrors .slx Constant4/5 + goal_yaw and map_const_local).
+% (GX, GY, GYAW) is the box REAR-BUMPER center; box extends +x_local for
+% BOX_L with width BOX_W.
+GX = 76.1; GY = -6.0; GYAW = pi/2;
+BOX_L = 6.0; BOX_W = 3.0;
 
 % --- Parse car_fr1_log ---
 t      = car_fr1_log(1, :)';
@@ -116,31 +122,51 @@ if ~exist(figs_dir, 'dir'); mkdir(figs_dir); end
 stamp = datestr(now, 'yyyymmdd_HHMMSS'); %#ok<DATST>
 prefix = fullfile(figs_dir, ['run_' stamp]);
 
-% --- Trajectory overlay on occupancy map (with obstacles) ---
-fig = figure('Visible','off','Position',[50 50 950 950]);
-if has_occ
-    imagesc([X_MIN X_MAX], [Y_MAX Y_MIN], occ_map);
-    colormap(flipud(gray)); axis xy equal tight; grid on; hold on;
-else
-    axis equal; grid on; hold on;
+% --- Trajectory overlay: full map (left) + parking zoom (right) ---
+fig = figure('Visible','off','Position',[40 40 1500 800]);
+
+for sp = 1:2
+    subplot(1, 2, sp); hold on; grid on; axis equal;
+    if has_occ
+        imagesc([X_MIN X_MAX], [Y_MAX Y_MIN], occ_map);
+        colormap(flipud(gray)); set(gca, 'YDir', 'normal');
+    end
+    % Planned path
+    if ~isempty(px_final)
+        plot(px_final, py_final, 'c-', 'LineWidth', 1.2);
+    end
+    % Ego trajectory
+    plot(ego_x, ego_y, 'b-', 'LineWidth', 1.4);
+    plot(ego_x(1),  ego_y(1),  'go', 'MarkerSize', 10, 'LineWidth', 2);
+    plot(t00_x, t00_y, 'r*', 'MarkerSize', 14, 'LineWidth', 2);
+
+    % Goal parking box (green dashed) + its heading arrow
+    [bxv, byv] = rect_corners(GX, GY, GYAW, BOX_L, BOX_W);
+    plot(bxv, byv, 'g--', 'LineWidth', 1.8);
+    quiver(GX, GY, 2.5*cos(GYAW), 2.5*sin(GYAW), 0, 'g', 'LineWidth', 1.5, 'MaxHeadSize', 1.5);
+
+    % Parked ego footprint at the final pose (magenta solid) + heading
+    [exv, eyv] = rect_corners(ego_x(end), ego_y(end), ego_yaw(end), EGO_L, EGO_W);
+    plot(exv, eyv, 'm-', 'LineWidth', 2.0);
+    quiver(ego_x(end), ego_y(end), 2.5*cos(ego_yaw(end)), 2.5*sin(ego_yaw(end)), 0, ...
+           'm', 'LineWidth', 1.5, 'MaxHeadSize', 1.5);
+
+    xlabel('x [m]'); ylabel('y [m]');
+    if sp == 1
+        xlim([X_MIN X_MAX]); ylim([Y_MIN Y_MAX]);
+        title(sprintf('Full map — d_{end}=%.2f m, path_{len}=%d', d_to_t00(end), plen_final));
+        lgd = {};
+        if ~isempty(px_final); lgd{end+1} = 'planned path'; end %#ok<AGROW>
+        lgd = [lgd, {'ego traj','start','T00','goal box','','parked ego'}];
+        legend(lgd, 'Location', 'southwest', 'FontSize', 8);
+    else
+        % Zoom on the parking area
+        zx = GX; zy = (GY + (GY + BOX_L)) / 2;
+        xlim([zx - 8, zx + 8]); ylim([zy - 8, zy + 8]);
+        yaw_err_end = rad2deg(angdiff(ego_yaw(end), GYAW));
+        title(sprintf('Parking zoom — yaw\\_err=%.2f deg', yaw_err_end));
+    end
 end
-% Planned path
-if ~isempty(px_final)
-    plot(px_final, py_final, 'c-', 'LineWidth', 1.0);
-end
-% Ego trajectory
-plot(ego_x, ego_y, 'b-', 'LineWidth', 1.6);
-plot(ego_x(1),  ego_y(1),  'go', 'MarkerSize', 12, 'LineWidth', 2);
-plot(ego_x(end),ego_y(end),'b+', 'MarkerSize', 12, 'LineWidth', 2);
-plot(t00_x, t00_y, 'r*', 'MarkerSize', 14, 'LineWidth', 2);
-xlim([X_MIN X_MAX]); ylim([Y_MIN Y_MAX]);
-xlabel('x [m]'); ylabel('y [m]');
-title(sprintf('Day4_5 Scenario 1 — d_{end}=%.2f m, path_{len}=%d', ...
-    d_to_t00(end), plen_final));
-lgd = {};
-if ~isempty(px_final); lgd{end+1} = 'planned path'; end
-lgd = [lgd, {'ego','start','end','T00'}];
-legend(lgd, 'Location', 'southwest');
 saveas(fig, [prefix '__trajectory.png']);
 close(fig);
 
@@ -240,4 +266,16 @@ function d = angdiff(a, b)
 d = a - b;
 while d > pi;  d = d - 2*pi; end
 while d < -pi; d = d + 2*pi; end
+end
+
+function [gx, gy] = rect_corners(cx, cy, yaw, len, wid)
+% Closed-polygon corners of a rear-bumper-anchored rectangle.
+% Local frame: x in [0, len], y in [-wid/2, +wid/2] (same convention as
+% the goal box and ego footprint in Parking.m).
+hw = wid / 2;
+lx = [0,  0,   len, len, 0];
+ly = [-hw, hw, hw, -hw, -hw];
+c = cos(yaw); s = sin(yaw);
+gx = cx + c*lx - s*ly;
+gy = cy + s*lx + c*ly;
 end

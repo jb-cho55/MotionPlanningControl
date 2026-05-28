@@ -87,6 +87,6 @@ c.SAFETY_MARGIN = 0.8;
 c.CLEAR_MAX = 3.0;
 c.W_CLEAR   = 1.2;
 c.PARK_BOX_L = 6.0;
-c.PARK_BOX_W = 2.3;       % was 3.0 — tightened to cap yaw error at ~2.4 deg
+c.PARK_BOX_W = 3.0;
 c.PARK_TOL   = 0.05;
 end
