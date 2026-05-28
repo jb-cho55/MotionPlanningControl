@@ -1,31 +1,28 @@
-function base_map = generate_map(map_boundary)
-%GENERATE_MAP  Build the baseline occupancy grid (drivable area mask).
+function mapMatrix = generate_map_(map_boundary, traffic_info, traffic_size)
+%GENERATE_MAP_  Self-contained baseline drivable-area mask for the
+%   Day4_5_Scenario_1.slx "MATLAB Function1" block.
 %
-%   base_map = generate_map(map_boundary)
+%   mapMatrix = generate_map_(map_boundary, traffic_info, traffic_size)
 %
-%   Input
-%       map_boundary : Nx2 or 2xN array of polygon vertices [x y] that bound
-%                      the DRIVABLE region of the parking lot.  Cells inside
-%                      the polygon are free (0); cells outside are occupied
-%                      (1).
-%
-%   Output
-%       base_map : 200x200 uint8 grid (1 = off-road / obstacle, 0 = drivable).
-%                  Grid covers x in [X_MIN, X_MAX], y in [Y_MIN, Y_MAX]
-%                  at RES m / cell (see map_const.m).
-%
-%   This is the baseline grid that add_obstacle then ORs the truck footprints
-%   on top of.  Keeping these as two stages matches the existing .slx
-%   data-flow (MATLAB Function1 -> MATLAB Function2 -> Parking) and lets each
-%   module be unit-tested independently.
-%
-%   The polygon membership test is a ray-cast (even-odd) algorithm operating
-%   on a closed polygon — codegen-compatible because the buffer is fixed
-%   size (MAX_BOUND = 16 vertices is plenty for the rectangular parking lot).
+%   This file mirrors the chart script verbatim so the .slx is independent
+%   of the rest of dev/day4_5/.  traffic_info / traffic_size are kept in the
+%   signature only to preserve the existing inport wiring; they are unused.
 %
 %#codegen
 
-c = map_const();
+u1 = traffic_info(1) * 0;   %#ok<NASGU>  % keep input in compile graph
+u2 = traffic_size(1) * 0;   %#ok<NASGU>
+
+mapMatrix = double(generate_map_local(map_boundary));
+end
+
+%% =====================================================================
+%% Local helper functions (inlined from generate_map.m + map_const.m)
+%% =====================================================================
+
+function base_map = generate_map_local(map_boundary)
+%#codegen
+c = map_const_local();
 N = c.N;
 res = c.RES;
 x_min = c.X_MIN;
@@ -33,11 +30,6 @@ y_max = c.Y_MAX;
 
 MAX_BOUND = int32(16);
 
-% Always work on fixed-size buffers (codegen-friendly).  Accepts:
-%   - Mx2 [x y] rows
-%   - 2xM [x; y] columns
-%   - flat (2M)x1 or 1x(2M) interleaved [x1; y1; x2; y2; ...]
-%     (this is what .slx's stacked Mux blocks usually produce)
 bx = zeros(MAX_BOUND, 1);
 by = zeros(MAX_BOUND, 1);
 M  = int32(0);
@@ -70,16 +62,13 @@ elseif ne >= int32(6) && mod(double(ne), 2) == 0
     end
 end
 
-% Default to "all occupied" if polygon is degenerate.
 if M < 3
     base_map = ones(N, N, 'uint8');
     return;
 end
 
-% Sort vertices CCW around the centroid so the polygon is always simple
-% regardless of the order the caller (e.g. a .slx Mux block) provides.
-% Without this, swapping two vertices yields a self-intersecting
-% "bowtie" polygon and point-in-polygon misclassifies half the grid.
+% CCW sort around centroid so a Mux-supplied vertex order can't form a
+% self-intersecting "bowtie" polygon.
 cx_b = 0.0;
 cy_b = 0.0;
 for i = int32(1):M
@@ -94,7 +83,6 @@ for i = int32(1):M
     ang(i) = atan2(by(i) - cy_b, bx(i) - cx_b);
 end
 
-% Selection sort (codegen-friendly, M is at most MAX_BOUND).
 for i = int32(1):M-int32(1)
     min_k = i;
     for j = i+int32(1):M
@@ -111,9 +99,6 @@ end
 
 base_map = zeros(N, N, 'uint8');
 
-% Drivable margin: ego must stay this far inside the polygon boundary
-% so that the ego footprint never crosses the road edge.  Same inflation
-% as add_obstacle uses for trucks.
 inflate_m = c.EGO_W * 0.5 + c.SAFETY_MARGIN;
 
 for row = 1:N
@@ -123,17 +108,33 @@ for row = 1:N
         if ~point_in_polygon(wx, wy, bx, by, M)
             base_map(row, col) = uint8(1);
         else
-            % Inside the polygon — but reject cells whose distance to ANY
-            % polygon edge is less than the inflation radius.  This carves
-            % a buffer along the road perimeter so the planner never
-            % places the ego center within inflate_m of the edge.
             if dist_to_polygon_edge(wx, wy, bx, by, M) < inflate_m
                 base_map(row, col) = uint8(1);
             end
         end
     end
 end
+end
 
+function c = map_const_local()
+%#codegen
+c.N        = int32(200);
+c.RES      = 0.5;
+c.X_MIN    = 0.0;
+c.X_MAX    = 100.0;
+c.Y_MIN    = -100.0;
+c.Y_MAX    = 0.0;
+c.TRUCK_W  = 2.48;
+c.TRUCK_L  = 11.5;
+c.EGO_W    = 1.9;
+c.EGO_L    = 4.7;
+c.WHEELBASE = 2.8;
+c.SAFETY_MARGIN = 0.8;
+c.CLEAR_MAX = 3.0;
+c.W_CLEAR   = 1.2;
+c.PARK_BOX_L = 6.0;
+c.PARK_BOX_W = 2.3;       % was 3.0 — tightened to cap yaw error at ~2.4 deg
+c.PARK_TOL   = 0.05;
 end
 
 function d_min = dist_to_polygon_edge(px, py, bx, by, M)
@@ -151,7 +152,6 @@ end
 
 function d = point_to_segment(px, py, ax, ay, qx, qy)
 %#codegen
-% Distance from point (px,py) to line segment (ax,ay)-(qx,qy).
 vx = qx - ax;
 vy = qy - ay;
 wx = px - ax;
@@ -174,7 +174,6 @@ end
 
 function inside = point_in_polygon(px, py, bx, by, M)
 %#codegen
-% Ray-cast (even-odd) test against polygon (bx,by) of length M.
 inside = false;
 j = double(M);
 for i = 1:double(M)

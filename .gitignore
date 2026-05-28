@@ -49,3 +49,14 @@ __pycache__/
 
 # 실습 자료 PDF (로컬 보존, git 트래킹 제외)
 *.pdf
+
+# Day4_5 To File 시뮬 로그 (매 실행마다 재생성)
+**/car_fr1_log.mat
+**/control_log.mat
+**/last_occ.mat
+**/last_path_x.mat
+**/last_path_y.mat
+**/last_path_len.mat
+
+# Day4_5 per-run 분석 스냅샷 (타임스탬프, 재생성)
+**/figs/run_*.png

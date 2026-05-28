@@ -1,284 +1,243 @@
-function analyze_carmaker_run(erg_path)
-%ANALYZE_CARMAKER_RUN  Post-process a Day4_5 Scenario 1 CarMaker run.
+function analyze_carmaker_run(mat_dir)
+%ANALYZE_CARMAKER_RUN  Visualise a Day4_5 Scenario 1 CarMaker run from the
+%   .mat files the .slx To File blocks drop next to the simulation.
 %
-%   analyze_carmaker_run()              % auto-find latest day4_5_scenario1
-%   analyze_carmaker_run(erg_path)      % full path to .erg file
+%   analyze_carmaker_run()              % auto-find latest matching folder
+%   analyze_carmaker_run(mat_dir)       % explicit dir holding the .mat files
 %
-%   Reads the ERG (CarMaker binary log) + its .erg.info sidecar, extracts:
-%       - Ego pose:   Car.Fr1.tx, Car.Fr1.ty, Car.Fr1.rz
-%       - Ego speed:  Car.vx
-%       - Steering:   Car.CFL.rz_ext, Car.CFR.rz_ext
-%       - Accel cmd:  AccelCtrl.DesiredAx
-%   Re-builds the static occupancy grid (Day4_5 trucks T01..T07) and
-%   produces a comparable visualisation to test_pipeline.m so the
-%   .m-only closed-loop and the .slx + CarMaker run can be compared
-%   side by side.
+%   Expected .mat files (produced by Day4_5_Scenario_1.slx To File blocks):
+%       car_fr1_log.mat     - var car_fr1_log [5 x N]: [t; tx; ty; rz; vx]
+%       control_log.mat     - var control_log  [5 x N]: [t; steer_fl; steer_fr; ax; sel]
+%       last_occ.mat        - var occ_map      [200 x 200] with obstacles baked in
+%       last_path_x.mat     - var path_x_log   [300 x N], last column = final path
+%       last_path_y.mat     - var path_y_log   [300 x N]
+%       last_path_len.mat   - var path_len_log [1 x N], last value = final length
 %
-%   Outputs (saved next to the .erg):
-%       <run>__trajectory.png   - ego path over occupancy
-%       <run>__signals.png      - v, ax, steer time series
-%       <run>__clearance.png    - min distance to nearest truck vs t
-%   Console:
-%       - sim duration, final position, distance to T00, min clearance,
-%         collision flag (clearance < 0).
+%   Renders (next to the .mat files):
+%       <stamp>__trajectory.png  - occ + ego trajectory + planned path overlay
+%       <stamp>__signals.png     - v, ax, steer, selector_ctrl, dist-to-T00
+%
+%   No dependencies on dev/day4_5 helpers — occupancy grid is loaded from
+%   last_occ.mat as-is (with obstacles baked in by add_obstacle_).
 
 here = fileparts(mfilename('fullpath'));
 addpath(here);
 
-if nargin < 1 || isempty(erg_path)
-    erg_path = find_latest_run();
+if nargin < 1 || isempty(mat_dir)
+    mat_dir = find_latest_mat_dir();
 end
-if ~exist(erg_path, 'file')
-    error('ERG file not found: %s', erg_path);
-end
-info_path = [erg_path '.info'];
-if ~exist(info_path, 'file')
-    error('Info file not found: %s', info_path);
+if ~exist(mat_dir, 'dir')
+    error('mat_dir not found: %s', mat_dir);
 end
 
 fprintf('=== analyze_carmaker_run ===\n');
-fprintf('ERG: %s\n', erg_path);
+fprintf('Reading .mat files from: %s\n', mat_dir);
 
-% --- Parse .erg.info to learn quantity layout ---
-[qty_names, qty_types] = parse_erg_info(info_path);
-fprintf('Quantities in log: %d\n', length(qty_names));
+% --- Load logs ---
+[car_fr1_log, has_ego]   = load_var(mat_dir, 'car_fr1_log.mat',    'car_fr1_log');
+[control_log, has_ctl]   = load_var(mat_dir, 'control_log.mat',    'control_log');
+[occ_map,     has_occ]   = load_var(mat_dir, 'last_occ.mat',       'occ_map');
+[path_x_log,  has_px]    = load_var(mat_dir, 'last_path_x.mat',    'path_x_log');
+[path_y_log,  has_py]    = load_var(mat_dir, 'last_path_y.mat',    'path_y_log');
+[path_len_log,has_pl]    = load_var(mat_dir, 'last_path_len.mat',  'path_len_log');
 
-% --- Read ERG binary ---
-data = read_erg(erg_path, qty_types);
-n_samples = size(data, 1);
-fprintf('Samples: %d\n', n_samples);
-
-% --- Pull the signals we need ---
-t      = pick(data, qty_names, 'Time');                  if isempty(t);  t = (0:n_samples-1)' * 0.01; end
-ego_x  = pick(data, qty_names, 'Car.Fr1.tx');
-ego_y  = pick(data, qty_names, 'Car.Fr1.ty');
-ego_yaw= pick(data, qty_names, 'Car.Fr1.rz');
-ego_v  = pick(data, qty_names, 'Car.vx');
-steer  = pick(data, qty_names, 'Car.CFL.rz_ext');
-ax_cmd = pick(data, qty_names, 'AccelCtrl.DesiredAx');
-
-if isempty(ego_x) || isempty(ego_y)
-    error('Required quantity Car.Fr1.tx/ty not found in log.');
+if ~has_ego
+    error('car_fr1_log.mat not found — run the simulation first.');
 end
 
-% --- Build static occupancy for visualisation (same as test_pipeline) ---
-c = map_const();
-boundary = [c.X_MIN c.Y_MIN; c.X_MAX c.Y_MIN; c.X_MAX c.Y_MAX; c.X_MIN c.Y_MAX];
-base = generate_map(boundary);
-trucks_deg = [40 -12  90;
-              40 -24  90;
-              40 -36  90;
-              40 -48  90;
-              39 -50   0;
-              51 -50   0;
-              63 -50   0];
-info = zeros(21, 1);
-for k = 1:7
-    info((k-1)*3 + 1) = trucks_deg(k, 1);
-    info((k-1)*3 + 2) = trucks_deg(k, 2);
-    info((k-1)*3 + 3) = deg2rad(trucks_deg(k, 3));
-end
-occ = add_obstacle(base, info, [c.TRUCK_W, c.TRUCK_L]);
+% Constants for the grid (mirrors Parking.m map_const_local)
+N = 200; RES = 0.5;
+X_MIN = 0; X_MAX = 100; Y_MIN = -100; Y_MAX = 0;
+EGO_W = 1.9;
 
-% --- Compute clearance over time (ego cell -> nearest occupied cell) ---
-clear_map = compute_clearance(occ);
-clr = nan(n_samples, 1);
-for k = 1:n_samples
-    if ego_x(k) < c.X_MIN || ego_x(k) > c.X_MAX || ego_y(k) < c.Y_MIN || ego_y(k) > c.Y_MAX
-        clr(k) = -1;
-        continue;
-    end
-    col = floor((ego_x(k) - c.X_MIN)/c.RES) + 1;
-    row = floor((c.Y_MAX - ego_y(k))/c.RES) + 1;
-    if row < 1 || row > double(c.N) || col < 1 || col > double(c.N)
-        clr(k) = -1;
+% --- Parse car_fr1_log ---
+t      = car_fr1_log(1, :)';
+ego_x  = car_fr1_log(2, :)';
+ego_y  = car_fr1_log(3, :)';
+ego_yaw= car_fr1_log(4, :)';
+ego_v  = car_fr1_log(5, :)';
+n_samp = numel(t);
+
+% --- Parse control_log if available ---
+if has_ctl
+    ct_t   = control_log(1, :)';
+    sfl    = control_log(2, :)';
+    sfr    = control_log(3, :)'; %#ok<NASGU>  (= sfl in current model)
+    ax_cmd = control_log(4, :)';
+    sel    = control_log(5, :)';
+else
+    ct_t = t; sfl = nan(n_samp,1); ax_cmd = nan(n_samp,1); sel = nan(n_samp,1);
+end
+
+% --- Final path snapshot ---
+% To File "Array" stores [N+1 x T] with row 1 = time.  Strip the time row.
+if has_px && has_py && has_pl
+    px_buf = strip_time_row(path_x_log);
+    py_buf = strip_time_row(path_y_log);
+    plen_buf = strip_time_row(path_len_log);
+    if size(plen_buf, 2) >= 1
+        plen_final = double(plen_buf(1, end));
     else
-        clr(k) = double(clear_map(int32(row), int32(col))) - c.EGO_W*0.5;
+        plen_final = numel(px_buf);
     end
+    if size(px_buf, 2) >= 1
+        px_final = px_buf(:, end);
+        py_final = py_buf(:, end);
+    else
+        px_final = px_buf(:); py_final = py_buf(:);
+    end
+    if plen_final >= 2 && plen_final <= numel(px_final)
+        px_final = px_final(1:plen_final);
+        py_final = py_final(1:plen_final);
+    end
+else
+    plen_final = 0; px_final = []; py_final = [];
 end
 
-t00_x = 76.1; t00_y = -5;
+t00_x = 76.1;  t00_y = -5;
 d_to_t00 = hypot(ego_x - t00_x, ego_y - t00_y);
 
 % --- Summary ---
 fprintf('\n--- Summary ---\n');
-fprintf('Sim duration : %.2f s (n=%d samples)\n', t(end)-t(1), n_samples);
-fprintf('Ego start    : (%.2f, %.2f)\n', ego_x(1), ego_y(1));
-fprintf('Ego end      : (%.2f, %.2f)\n', ego_x(end), ego_y(end));
-fprintf('Min |ego - T00|: %.2f m\n', min(d_to_t00));
-fprintf('Min clearance (ego body to truck edge): %.2f m\n', min(clr));
-if min(clr) < 0
-    fprintf('!! COLLISION detected (clearance went negative)\n');
-else
-    fprintf('No collision (clearance > 0 throughout)\n');
+fprintf('Samples: %d   sim duration: %.2f s\n', n_samp, t(end) - t(1));
+fprintf('Ego start: (%.2f, %.2f)  end: (%.2f, %.2f)\n', ego_x(1), ego_y(1), ego_x(end), ego_y(end));
+fprintf('Min |ego - T00|: %.2f m   final: %.2f m\n', min(d_to_t00), d_to_t00(end));
+fprintf('Final yaw error from pi/2: %.2f deg\n', rad2deg(angdiff(ego_yaw(end), pi/2)));
+if has_occ
+    fprintf('Occupancy grid: %s, occupied=%d (with obstacles)\n', mat2str(size(occ_map)), sum(occ_map(:) > 0));
+end
+if has_pl
+    fprintf('Final path length: %d samples\n', plen_final);
 end
 
-% --- Output paths ---
-[outdir, runname, ~] = fileparts(erg_path);
-prefix = fullfile(outdir, runname);
+% --- Output paths (always under dev/day4_5/figs) ---
+figs_dir = fullfile(here, 'figs');
+if ~exist(figs_dir, 'dir'); mkdir(figs_dir); end
+stamp = datestr(now, 'yyyymmdd_HHMMSS'); %#ok<DATST>
+prefix = fullfile(figs_dir, ['run_' stamp]);
 
-% --- Trajectory plot ---
-fig = figure('Visible','off','Position',[50 50 900 900]);
-imagesc([c.X_MIN c.X_MAX], [c.Y_MAX c.Y_MIN], occ);
-colormap(flipud(gray)); axis xy equal tight; grid on; hold on;
+% --- Trajectory overlay on occupancy map (with obstacles) ---
+fig = figure('Visible','off','Position',[50 50 950 950]);
+if has_occ
+    imagesc([X_MIN X_MAX], [Y_MAX Y_MIN], occ_map);
+    colormap(flipud(gray)); axis xy equal tight; grid on; hold on;
+else
+    axis equal; grid on; hold on;
+end
+% Planned path
+if ~isempty(px_final)
+    plot(px_final, py_final, 'c-', 'LineWidth', 1.0);
+end
+% Ego trajectory
 plot(ego_x, ego_y, 'b-', 'LineWidth', 1.6);
-plot(ego_x(1), ego_y(1), 'go', 'MarkerSize', 12, 'LineWidth', 2);
+plot(ego_x(1),  ego_y(1),  'go', 'MarkerSize', 12, 'LineWidth', 2);
+plot(ego_x(end),ego_y(end),'b+', 'MarkerSize', 12, 'LineWidth', 2);
 plot(t00_x, t00_y, 'r*', 'MarkerSize', 14, 'LineWidth', 2);
-plot(ego_x(end), ego_y(end), 'b+', 'MarkerSize', 12, 'LineWidth', 2);
-xlim([c.X_MIN c.X_MAX]); ylim([c.Y_MIN c.Y_MAX]);
-legend({'occ','ego trajectory','start','T00','end'}, 'Location','southwest');
-title(sprintf('CarMaker run — Day4_5 Scenario 1 (min clr=%.2f m, d_{end}=%.2f m)', ...
-    min(clr), d_to_t00(end)));
+xlim([X_MIN X_MAX]); ylim([Y_MIN Y_MAX]);
 xlabel('x [m]'); ylabel('y [m]');
+title(sprintf('Day4_5 Scenario 1 — d_{end}=%.2f m, path_{len}=%d', ...
+    d_to_t00(end), plen_final));
+lgd = {};
+if ~isempty(px_final); lgd{end+1} = 'planned path'; end
+lgd = [lgd, {'ego','start','end','T00'}];
+legend(lgd, 'Location', 'southwest');
 saveas(fig, [prefix '__trajectory.png']);
 close(fig);
 
-% --- Signal plot ---
-fig2 = figure('Visible','off','Position',[50 50 1200 800]);
-n = 4;
-subplot(n,1,1); plot(t, ego_v, 'r-'); grid on;
+% --- Signals ---
+fig2 = figure('Visible','off','Position',[50 50 1200 1000]);
+subplot(5,1,1); plot(t, ego_v, 'r-'); grid on;
 title('ego v [m/s] (Car.vx)'); xlabel('t [s]');
-subplot(n,1,2); plot(t, ax_cmd, 'b-'); grid on;
-title('desired ax [m/s^2] (AccelCtrl.DesiredAx)'); xlabel('t [s]');
-subplot(n,1,3); plot(t, steer, 'k-'); grid on;
-title('steer [rad] (Car.CFL.rz_ext)'); xlabel('t [s]');
-subplot(n,1,4); plot(t, d_to_t00, 'm-'); grid on;
+subplot(5,1,2); plot(ct_t, ax_cmd, 'b-'); grid on;
+title('desired ax [m/s^2]'); xlabel('t [s]');
+subplot(5,1,3); plot(ct_t, sfl, 'k-'); grid on;
+title('steer FL [rad]'); xlabel('t [s]');
+subplot(5,1,4); plot(ct_t, sel, 'm-'); grid on; ylim([-1.5 1.5]);
+title('DM.SelectorCtrl (+1 drive, -1 reverse)'); xlabel('t [s]');
+subplot(5,1,5); plot(t, d_to_t00, 'g-'); grid on;
 title('distance to T00 [m]'); xlabel('t [s]');
 saveas(fig2, [prefix '__signals.png']);
 close(fig2);
 
-% --- Clearance plot ---
-fig3 = figure('Visible','off','Position',[50 50 1100 500]);
-plot(t, clr, 'b-', 'LineWidth', 1.2); hold on; grid on;
-yline(0, 'r--', 'collision threshold');
-yline(c.SAFETY_MARGIN, 'g--', sprintf('safety margin (%.2f m)', c.SAFETY_MARGIN));
-title('Ego body clearance to nearest truck edge [m]');
-xlabel('t [s]'); ylabel('clearance [m]');
-saveas(fig3, [prefix '__clearance.png']);
-close(fig3);
-
-fprintf('\nSaved figures next to ERG:\n  %s__trajectory.png\n  %s__signals.png\n  %s__clearance.png\n', ...
-    prefix, prefix, prefix);
+fprintf('\nSaved figures:\n  %s__trajectory.png\n  %s__signals.png\n', prefix, prefix);
 
 end
 
-
-function p = find_latest_run()
-% Auto-find the most recent SimOutput .erg with "day4_5" or "Day4_5" in path.
-root = 'C:\Users\gmkk6\Desktop\MotionPlanningControl\02_Carmaker_project\Practice_sample\SimOutput';
-d = dir(fullfile(root, '**', '*.erg'));
-keep = false(length(d), 1);
-for i = 1:length(d)
-    if contains(lower(d(i).folder), 'day4_5') || contains(lower(d(i).name), 'day4_5')
-        keep(i) = true;
+function p = find_latest_mat_dir()
+% Look for car_fr1_log.mat under the project root, return its folder.
+root_candidates = {
+    'C:\Users\gmkk6\Desktop\MotionPlanningControl\02_Carmaker_project\Practice_sample';
+    'C:\Users\gmkk6\Desktop\MotionPlanningControl\02_Carmaker_project';
+    pwd();
+};
+hits = struct('folder', {}, 'datenum', {});
+for k = 1:numel(root_candidates)
+    root = root_candidates{k};
+    if ~exist(root, 'dir'); continue; end
+    d = dir(fullfile(root, '**', 'car_fr1_log.mat'));
+    for i = 1:numel(d)
+        hits(end+1).folder = d(i).folder; %#ok<AGROW>
+        hits(end).datenum  = d(i).datenum;
     end
 end
-d = d(keep);
-if isempty(d)
-    error(['No .erg with "day4_5" in path under %s.\n' ...
-           'Run the scenario first, or pass the explicit .erg path.'], root);
+if isempty(hits)
+    error('No car_fr1_log.mat found under MotionPlanningControl/02_Carmaker_project/.\n   Run the simulation first.');
 end
-[~, idx] = max([d.datenum]);
-p = fullfile(d(idx).folder, d(idx).name);
+[~, idx] = max([hits.datenum]);
+p = hits(idx).folder;
 end
 
-function [names, types] = parse_erg_info(info_path)
-% Parse Name/Type lines from .erg.info.
-names = strings(0, 1);
-types = strings(0, 1);
-fid = fopen(info_path, 'rt');
-if fid < 0; error('Cannot open %s', info_path); end
-cur_name = '';
-cur_type = '';
-cur_idx  = 0;
-tline = fgetl(fid);
-while ischar(tline)
-    tok = regexp(tline, 'File\.At\.(\d+)\.Name\s*=\s*(.+)', 'tokens', 'once');
-    if ~isempty(tok)
-        if cur_idx > 0 && ~isempty(cur_name)
-            names(cur_idx, 1) = string(strtrim(cur_name));
-            types(cur_idx, 1) = string(strtrim(cur_type));
-        end
-        cur_idx  = str2double(tok{1});
-        cur_name = tok{2};
-        cur_type = '';
-    end
-    tok = regexp(tline, 'File\.At\.(\d+)\.Type\s*=\s*(.+)', 'tokens', 'once');
-    if ~isempty(tok)
-        cur_type = tok{2};
-    end
-    tline = fgetl(fid);
+function [v, ok] = load_var(mat_dir, fname, vname)
+v  = [];
+ok = false;
+fpath = fullfile(mat_dir, fname);
+if ~exist(fpath, 'file')
+    fprintf('  [skip] %s not found\n', fname);
+    return;
 end
-if cur_idx > 0 && ~isempty(cur_name)
-    names(cur_idx, 1) = string(strtrim(cur_name));
-    types(cur_idx, 1) = string(strtrim(cur_type));
+S = load(fpath);
+raw = [];
+if isfield(S, vname)
+    raw = S.(vname);
+else
+    flds = fieldnames(S);
+    if ~isempty(flds); raw = S.(flds{1}); end
 end
-fclose(fid);
+if isempty(raw); return; end
+
+% Timeseries-format To File yields a `timeseries` object.  The time axis
+% is whichever Data dim matches numel(.Time).  Pull the LAST frame.
+if isa(raw, 'timeseries')
+    d  = raw.Data;
+    nt = numel(raw.Time);
+    sz = size(d);
+    time_dim = find(sz == nt, 1, 'last');   % prefer last matching dim
+    if isempty(time_dim); time_dim = ndims(d); end
+    % Index "last frame" along time_dim
+    idx = repmat({':'}, 1, ndims(d));
+    idx{time_dim} = sz(time_dim);
+    v = squeeze(d(idx{:}));
+    fprintf('  loaded %s (timeseries, T=%d -> last frame %s)\n', fname, nt, mat2str(size(v)));
+else
+    v = raw;
+    fprintf('  loaded %s (%s, size %s)\n', fname, vname, mat2str(size(v)));
+end
+ok = true;
 end
 
-function data = read_erg(erg_path, types)
-% Read a CarMaker ERG binary (little-endian, packed columns).
-fid = fopen(erg_path, 'rb', 'ieee-le');
-if fid < 0; error('Cannot open %s', erg_path); end
-% ERG header (CarMaker 5+): 8-byte magic + 8 reserved.  Skip if present.
-hdr = fread(fid, 16, 'uint8');
-if numel(hdr) < 16
-    fseek(fid, 0, 'bof');
-end
-rec_size = 0;
-col_kinds = strings(length(types), 1);
-for i = 1:length(types)
-    t = lower(strtrim(char(types(i))));
-    col_kinds(i) = t;
-    switch t
-        case {'float','single'};         rec_size = rec_size + 4;
-        case {'double'};                 rec_size = rec_size + 8;
-        case {'int','int32','long'};     rec_size = rec_size + 4;
-        case {'uint','uint32','ulong'};  rec_size = rec_size + 4;
-        case {'short','int16'};          rec_size = rec_size + 2;
-        case {'ushort','uint16'};        rec_size = rec_size + 2;
-        case {'char','int8'};            rec_size = rec_size + 1;
-        case {'uchar','uint8'};          rec_size = rec_size + 1;
-        otherwise;                        rec_size = rec_size + 4;
-    end
-end
-% File body
-start = ftell(fid);
-fseek(fid, 0, 'eof');
-nbytes = ftell(fid) - start;
-fseek(fid, start, 'bof');
-n_rec = floor(nbytes / rec_size);
-raw = fread(fid, n_rec * rec_size, '*uint8');
-fclose(fid);
-data = zeros(n_rec, length(types));
-off = 0;
-for i = 1:length(types)
-    t = col_kinds(i);
-    switch t
-        case {'float','single'};         sz = 4; fmt = 'single';
-        case {'double'};                 sz = 8; fmt = 'double';
-        case {'int','int32','long'};     sz = 4; fmt = 'int32';
-        case {'uint','uint32','ulong'};  sz = 4; fmt = 'uint32';
-        case {'short','int16'};          sz = 2; fmt = 'int16';
-        case {'ushort','uint16'};        sz = 2; fmt = 'uint16';
-        case {'char','int8'};            sz = 1; fmt = 'int8';
-        case {'uchar','uint8'};          sz = 1; fmt = 'uint8';
-        otherwise;                        sz = 4; fmt = 'single';
-    end
-    col = zeros(n_rec, 1);
-    for r = 0:n_rec-1
-        chunk = raw(r*rec_size + off + (1:sz));
-        col(r+1) = typecast(uint8(chunk(:)).', fmt);
-    end
-    data(:, i) = col;
-    off = off + sz;
+function out = strip_time_row(arr)
+% To File "Array" format stores [N+1 x T] with row 1 = sim time.
+% Drop row 1 unless the array is too short to have signal rows.
+if isempty(arr); out = arr; return; end
+if size(arr, 1) >= 2
+    out = arr(2:end, :);
+else
+    out = arr;
 end
 end
 
-function v = pick(data, names, q)
-v = [];
-idx = find(strcmpi(names, q), 1);
-if ~isempty(idx)
-    v = data(:, idx);
-end
+function d = angdiff(a, b)
+d = a - b;
+while d > pi;  d = d - 2*pi; end
+while d < -pi; d = d + 2*pi; end
 end
