@@ -53,9 +53,38 @@ for i = 1:num_traffic
     c_yaw = cos(yaw);
     s_yaw = sin(yaw);
 
-    for row = 1:N
+    % Only scan the cells inside the footprint's world AABB instead of the
+    % whole 200x200 grid.  The 4 inflated-footprint corners (local
+    % x in [-margin, veh_l+margin], y in [-half_w, half_w]) map to world via
+    % the forward rotation (dx = lx*c - ly*s, dy = lx*s + ly*c); their
+    % min/max give the AABB.  The inner footprint test below is unchanged,
+    % so the resulting grid is identical — only the scan region shrinks.
+    lxs = [-margin, -margin, veh_l + margin, veh_l + margin];
+    lys = [-half_w,  half_w, half_w,        -half_w];
+    wx_min =  1.0e18; wx_max = -1.0e18;
+    wy_min =  1.0e18; wy_max = -1.0e18;
+    for ci = 1:4
+        cwx = rear_x + lxs(ci) * c_yaw - lys(ci) * s_yaw;
+        cwy = rear_y + lxs(ci) * s_yaw + lys(ci) * c_yaw;
+        if cwx < wx_min; wx_min = cwx; end
+        if cwx > wx_max; wx_max = cwx; end
+        if cwy < wy_min; wy_min = cwy; end
+        if cwy > wy_max; wy_max = cwy; end
+    end
+    % world -> cell index (col grows with x; row grows as y decreases)
+    col_min = int32(floor((wx_min - x_min) / res)) + int32(1);
+    col_max = int32(floor((wx_max - x_min) / res)) + int32(1);
+    row_min = int32(floor((y_max - wy_max) / res)) + int32(1);
+    row_max = int32(floor((y_max - wy_min) / res)) + int32(1);
+    % +/-1 cell guard against floor rounding, then clamp to [1, N]
+    col_min = max(int32(1), col_min - int32(1));
+    col_max = min(N,        col_max + int32(1));
+    row_min = max(int32(1), row_min - int32(1));
+    row_max = min(N,        row_max + int32(1));
+
+    for row = row_min:row_max
         wy = y_max - (double(row) - 0.5) * res;
-        for col = 1:N
+        for col = col_min:col_max
             wx = x_min + (double(col) - 0.5) * res;
             dx = wx - rear_x;
             dy = wy - rear_y;

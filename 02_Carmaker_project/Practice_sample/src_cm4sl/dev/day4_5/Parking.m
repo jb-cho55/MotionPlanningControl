@@ -196,6 +196,20 @@ kx(1) = int32(round(sx / POS_RES));
 ky(1) = int32(round(sy / POS_RES));
 kw(1) = int32(round(wrap_2pi(sy_w) / YAW_RES));
 
+% O(1) duplicate-state detection via a dense 3D lookup table indexed by the
+% discrete key (kx, ky, kw) -> node index (0 = empty).  Replaces the old
+% O(node_count) linear scan (which made hard plans O(N^2) ~ minutes).  Sized
+% to cover the on-grid range plus the start-bubble margin; any key outside
+% falls back to a (rare) linear scan so correctness is unconditional.
+% idx mapping: ix = kx + KX_OFF, iy = ky + KY_OFF, iw = kw + 1.
+KX_N = int32(221); KY_N = int32(211); KW_N = int32(26);
+KX_OFF = int32(16); KY_OFF = int32(206);
+lut = zeros(KX_N, KY_N, KW_N, 'int32');
+ix1 = kx(1) + KX_OFF; iy1 = ky(1) + KY_OFF; iw1 = kw(1) + int32(1);
+if ix1 >= 1 && ix1 <= KX_N && iy1 >= 1 && iy1 <= KY_N && iw1 >= 1 && iw1 <= KW_N
+    lut(ix1, iy1, iw1) = int32(1);
+end
+
 goal_idx = int32(0);
 rs_attached = false;
 rs_px   = zeros(1, MAX_PATH);
@@ -268,11 +282,18 @@ for iter = 1:MAX_NODES
         kyn = int32(round(ny_n / POS_RES));
         kwn = int32(round(wrap_2pi(nyaw_n) / YAW_RES));
 
+        ixn = kxn + KX_OFF; iyn = kyn + KY_OFF; iwn = kwn + int32(1);
+        in_lut = (ixn >= 1 && ixn <= KX_N && iyn >= 1 && iyn <= KY_N && ...
+                  iwn >= 1 && iwn <= KW_N);
         dup_idx = int32(0);
-        for j = int32(1):node_count
-            if kx(j) == kxn && ky(j) == kyn && kw(j) == kwn
-                dup_idx = j;
-                break;
+        if in_lut
+            dup_idx = lut(ixn, iyn, iwn);
+        else
+            for j = int32(1):node_count   % fallback (key outside LUT bounds)
+                if kx(j) == kxn && ky(j) == kyn && kw(j) == kwn
+                    dup_idx = j;
+                    break;
+                end
             end
         end
 
@@ -319,6 +340,9 @@ for iter = 1:MAX_NODES
             kx(node_count) = kxn;
             ky(node_count) = kyn;
             kw(node_count) = kwn;
+            if in_lut
+                lut(ixn, iyn, iwn) = node_count;
+            end
         end
     end
 end

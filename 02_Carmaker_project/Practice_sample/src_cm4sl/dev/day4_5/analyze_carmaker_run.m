@@ -221,7 +221,18 @@ if ~exist(fpath, 'file')
     fprintf('  [skip] %s not found\n', fname);
     return;
 end
-S = load(fpath);
+finfo = dir(fpath);
+if ~isempty(finfo) && finfo.bytes > 5e8
+    fprintf('  [skip] %s too large (%.2f GB) — likely logged every tick; skipping\n', ...
+        fname, finfo.bytes / 1e9);
+    return;
+end
+try
+    S = load(fpath);
+catch ME
+    fprintf('  [skip] %s load failed: %s\n', fname, ME.message);
+    return;
+end
 raw = [];
 if isfield(S, vname)
     raw = S.(vname);
