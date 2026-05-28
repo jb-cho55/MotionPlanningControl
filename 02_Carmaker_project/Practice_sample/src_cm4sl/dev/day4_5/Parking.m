@@ -174,8 +174,15 @@ ng  = zeros(MAX_NODES, 1);
 nf  = zeros(MAX_NODES, 1);
 nparent = zeros(MAX_NODES, 1, 'int32');
 ndir    = zeros(MAX_NODES, 1, 'int8');
-nopen   = false(MAX_NODES, 1);
 nclosed = false(MAX_NODES, 1);
+
+% Indexed binary min-heap over the open set, keyed by (nf, node index).
+% heap(1..heap_size) holds open-node indices; heap_pos(node) is that node's
+% slot (0 = not in heap).  Replaces the old O(node_count) linear min-f scan
+% with O(log N) push/pop/decrease-key -- the last O(N^2) in the planner.
+heap      = zeros(MAX_NODES, 1, 'int32');
+heap_pos  = zeros(MAX_NODES, 1, 'int32');
+heap_size = int32(0);
 
 kx = zeros(MAX_NODES, 1, 'int32');
 ky = zeros(MAX_NODES, 1, 'int32');
@@ -191,7 +198,7 @@ h0 = lookup_h(sx, sy, h_grid) + W_YAW * abs(angle_diff(gyaw, sy_w));
 nf(1)   = W_HEUR * h0;
 nparent(1) = int32(0);
 ndir(1)    = int8(1);
-nopen(1)   = true;
+[heap, heap_pos, heap_size] = heap_push(heap, heap_pos, heap_size, int32(1), nf);
 kx(1) = int32(round(sx / POS_RES));
 ky(1) = int32(round(sy / POS_RES));
 kw(1) = int32(round(wrap_2pi(sy_w) / YAW_RES));
@@ -219,19 +226,11 @@ rs_pdir = zeros(1, MAX_PATH, 'int8');
 rs_plen = int32(0);
 
 for iter = 1:MAX_NODES
-    cur = int32(0);
-    best_f = 1.0e12;
-    for i = int32(1):node_count
-        if nopen(i) && nf(i) < best_f
-            best_f = nf(i);
-            cur = i;
-        end
-    end
-    if cur == int32(0)
+    if heap_size == int32(0)
         break;
     end
-
-    nopen(cur)   = false;
+    cur = heap(1);
+    [heap, heap_pos, heap_size] = heap_remove_top(heap, heap_pos, heap_size, nf);
     nclosed(cur) = true;
 
     cx = nx(cur); cy = ny(cur); cyaw = nyaw(cur);
@@ -323,7 +322,10 @@ for iter = 1:MAX_NODES
             nf(dup_idx)  = new_f;
             nparent(dup_idx) = cur;
             ndir(dup_idx)    = dir_a;
-            nopen(dup_idx)   = true;
+            % dup is open (closed nodes were rejected above) -> already in the
+            % heap.  A better-g relaxation can RAISE f (the overwritten pose may
+            % have a worse heuristic), so re-sift in whichever direction needed.
+            [heap, heap_pos] = heap_resift(heap, heap_pos, heap_size, heap_pos(dup_idx), nf);
         else
             if node_count >= MAX_NODES
                 break;
@@ -336,13 +338,13 @@ for iter = 1:MAX_NODES
             nf(node_count)   = new_f;
             nparent(node_count) = cur;
             ndir(node_count)    = dir_a;
-            nopen(node_count)   = true;
             kx(node_count) = kxn;
             ky(node_count) = kyn;
             kw(node_count) = kwn;
             if in_lut
                 lut(ixn, iyn, iwn) = node_count;
             end
+            [heap, heap_pos, heap_size] = heap_push(heap, heap_pos, heap_size, node_count, nf);
         end
     end
 end
@@ -386,6 +388,122 @@ if rs_attached && rs_plen >= int32(2)
         path_yaw(path_len) = rs_pyaw(k);
         path_dir(path_len) = rs_pdir(k);
     end
+end
+end
+
+%% =====================================================================
+%% Local helpers — indexed binary min-heap (open set)
+%% =====================================================================
+
+function [heap, heap_pos, heap_size] = heap_push(heap, heap_pos, heap_size, node, nf)
+%#codegen
+% Insert node (with priority nf(node)) into the heap, then sift it up.
+heap_size = heap_size + int32(1);
+heap(heap_size) = node;
+heap_pos(node)  = heap_size;
+[heap, heap_pos] = heap_sift_up(heap, heap_pos, heap_size, nf);
+end
+
+function [heap, heap_pos, heap_size] = heap_remove_top(heap, heap_pos, heap_size, nf)
+%#codegen
+% Remove the min element (heap(1)).  Caller reads heap(1) before calling.
+heap_pos(heap(1)) = int32(0);            % old top leaves the heap
+last = heap(heap_size);
+heap_size = heap_size - int32(1);
+if heap_size >= int32(1)
+    heap(1) = last;
+    heap_pos(last) = int32(1);
+    pos = int32(1);
+    while true
+        l = int32(2) * pos;
+        r = l + int32(1);
+        smallest = pos;
+        if l <= heap_size && heap_less(heap(l), heap(smallest), nf)
+            smallest = l;
+        end
+        if r <= heap_size && heap_less(heap(r), heap(smallest), nf)
+            smallest = r;
+        end
+        if smallest == pos
+            break;
+        end
+        tmp = heap(pos); heap(pos) = heap(smallest); heap(smallest) = tmp;
+        heap_pos(heap(pos))      = pos;
+        heap_pos(heap(smallest)) = smallest;
+        pos = smallest;
+    end
+end
+end
+
+function [heap, heap_pos] = heap_sift_up(heap, heap_pos, pos, nf)
+%#codegen
+% Move the node at slot pos toward the root until heap order is restored.
+while pos > int32(1)
+    parent = bitshift(pos, -1);          % floor(pos/2)
+    if heap_less(heap(pos), heap(parent), nf)
+        tmp = heap(parent); heap(parent) = heap(pos); heap(pos) = tmp;
+        heap_pos(heap(parent)) = parent;
+        heap_pos(heap(pos))    = pos;
+        pos = parent;
+    else
+        break;
+    end
+end
+end
+
+function [heap, heap_pos] = heap_resift(heap, heap_pos, heap_size, pos, nf)
+%#codegen
+% Restore heap order after the key at slot `pos` changed in EITHER direction.
+% A dup relaxation lowers g but can RAISE f (the overwritten pose may have a
+% worse heuristic), so the node may need to move down, not just up.  Sift up
+% first; if it did not move, sift down.
+moved_up = false;
+while pos > int32(1)
+    parent = bitshift(pos, -1);
+    if heap_less(heap(pos), heap(parent), nf)
+        tmp = heap(parent); heap(parent) = heap(pos); heap(pos) = tmp;
+        heap_pos(heap(parent)) = parent;
+        heap_pos(heap(pos))    = pos;
+        pos = parent;
+        moved_up = true;
+    else
+        break;
+    end
+end
+if ~moved_up
+    while true
+        l = int32(2) * pos;
+        r = l + int32(1);
+        smallest = pos;
+        if l <= heap_size && heap_less(heap(l), heap(smallest), nf)
+            smallest = l;
+        end
+        if r <= heap_size && heap_less(heap(r), heap(smallest), nf)
+            smallest = r;
+        end
+        if smallest == pos
+            break;
+        end
+        tmp = heap(pos); heap(pos) = heap(smallest); heap(smallest) = tmp;
+        heap_pos(heap(pos))      = pos;
+        heap_pos(heap(smallest)) = smallest;
+        pos = smallest;
+    end
+end
+end
+
+function tf = heap_less(a, b, nf)
+%#codegen
+% True if node a outranks node b: smaller nf, ties broken by smaller node
+% index.  This matches the original strict-< linear scan, which kept the
+% lowest-index node among equal-f candidates -> selection order is identical.
+fa = nf(a); fb = nf(b);
+if fa < fb
+    tf = true;
+elseif fa > fb
+    tf = false;
+else
+    tf = (a < b);
 end
 end
 
