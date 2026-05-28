@@ -439,7 +439,7 @@ function [heap, heap_pos] = heap_sift_up(heap, heap_pos, pos, nf)
 %#codegen
 % Move the node at slot pos toward the root until heap order is restored.
 while pos > int32(1)
-    parent = bitshift(pos, -1);          % floor(pos/2)
+    parent = max(int32(1), bitshift(pos, -1));   % floor(pos/2); max() keeps it >=1 for codegen
     if heap_less(heap(pos), heap(parent), nf)
         tmp = heap(parent); heap(parent) = heap(pos); heap(pos) = tmp;
         heap_pos(heap(parent)) = parent;
@@ -457,9 +457,12 @@ function [heap, heap_pos] = heap_resift(heap, heap_pos, heap_size, pos, nf)
 % A dup relaxation lowers g but can RAISE f (the overwritten pose may have a
 % worse heuristic), so the node may need to move down, not just up.  Sift up
 % first; if it did not move, sift down.
+if pos < int32(1)        % not in heap (defensive) -> nothing to do; bounds index for codegen
+    return;
+end
 moved_up = false;
 while pos > int32(1)
-    parent = bitshift(pos, -1);
+    parent = max(int32(1), bitshift(pos, -1));   % floor(pos/2); max() keeps it >=1 for codegen
     if heap_less(heap(pos), heap(parent), nf)
         tmp = heap(parent); heap(parent) = heap(pos); heap(pos) = tmp;
         heap_pos(heap(parent)) = parent;
