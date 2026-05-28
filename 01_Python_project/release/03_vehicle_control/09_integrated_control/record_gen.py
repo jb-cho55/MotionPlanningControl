@@ -121,10 +121,10 @@ def main() -> None:
     sim_time = 45.0
     road = Road(R=200.0)
     # [튜닝] 게인/lookahead 값을 바꿔 응답 변화 비교 — test_*.py 의 값은 변경 X (합격 기준)
-    pp = PurePursuit(L=4.0, lookahead_time=0.0)
+    pp = PurePursuit(L=4.0, lookahead_time=4.0)
     lat_ctrl = LateralController(pp, lookahead_x_fn=lambda vx: vx * pp.lookahead_time)
     long_ctrl = LongitudinalController(
-        dt=DT, kp_v=0.0, kd_v=0.0, kp_g=0.0, kd_g=0.0, tau_gap=0.0,
+        dt=DT, kp_v=0.5, kd_v=0.0, kp_g=2.0, kd_g=3.0, tau_gap=1.5,
     )
     decision = LongitudinalDecision(road)
     pipe = ControlPipeline(

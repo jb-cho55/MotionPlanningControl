@@ -35,6 +35,16 @@ class LongitudinalController:
         # 2) 첫 호출 D=0; 이후 d_err = (err - prev_err) / dt
         # 3) ax = kp_v · err + kd_v · d_err
         # 4) prev_v_err 갱신
+
+        err = v_des - v_ego
+        if(self.prev_v_err is None):
+            u = self.kp_v * err
+        else:
+            d_err = (err - self.prev_err) / self.dt
+            u = self.kp_v * err + self.kd_v * d_err
+        
+        return u
+
         raise NotImplementedError
 
     def timegap_step(self, gap: float, v_ego: float, v_target: float) -> float:
@@ -44,4 +54,12 @@ class LongitudinalController:
         # 2) gap_err = gap - desired_gap        (양수: 멀어진 상태)
         # 3) rel_v = v_target - v_ego           (양수: target 이 멀어지는 중)
         # 4) ax = kp_g · gap_err + kd_g · rel_v
+
+        desired_gap = self.tau_gap * v_ego
+        gap_err = gap - desired_gap 
+        rel_v = v_target - v_ego
+
+        ax = self.kp_g * gap_err + self.kd_g * rel_v
+
+        return ax
         raise NotImplementedError

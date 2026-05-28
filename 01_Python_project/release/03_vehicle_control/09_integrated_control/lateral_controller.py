@@ -42,6 +42,12 @@ class PurePursuit:
         # 1) d_lh = lookahead_time · vx
         # 2) y_lh = _polyval_at(coeff, d_lh)
         # 3) δ = atan( 2 · L · y_lh / (d_lh² + y_lh² + ε) )
+
+        d_lh = self.lookahead_time * vx
+        y_lh =  _polyval_at(coeff, d_lh)
+        delta = np.atan(2 * self.L * y_lh / (d_lh**2 + y_lh**2 + _EPS))
+
+        return delta
         raise NotImplementedError
 
 

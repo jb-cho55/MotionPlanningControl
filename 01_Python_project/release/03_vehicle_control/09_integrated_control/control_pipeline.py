@@ -102,7 +102,13 @@ class LongitudinalDecision:
         #    y_in_road = target.Y - self.road.y_center(target.X)
         # 2) y_in_road < self.y_invasion_offset 이면 self.invaded = True (latch)
         # 3) return "timegap" if self.invaded else "speed"
-        raise NotImplementedError
+
+        if self.invaded is False:
+            y_in_road = target.Y - self.road.y_center(target.X)
+            if y_in_road < self.y_invasion_offset:
+                self.invaded = True
+
+        return "timegap" if self.invaded else "speed"
 
 
 # -- 통합 pipeline ------------------------------------------------------------
@@ -168,4 +174,31 @@ class ControlPipeline:
         # (ACC 의 timegap 식은 gap 멀면 양수 가속 명령까지 내지만, ego lane 침범 target 앞에서
         #  가속하면 안 됨 → speed 명령 (=0 평형) 으로 capping. 작은 쪽 = 더 보수적인 ax.)
         # return PipelineOutput(delta, ax, mode, coeff, fit_local_points, (lookahead_x, y_lh))
+
+        cos_y, sin_y = np.cos(ego.Yaw), np.sin(ego.Yaw)
+        x_global = ego.X + cos_y * self.sample_xs
+        y_global = self.ref_y_fn(x_global)
+        points   = np.column_stack([x_global, y_global])
+        self.g2l.convert(points, ego.Yaw, ego.X, ego.Y)
+        self.fitter.fit(self.g2l.local_points)
+        coeff = self.fitter.coeff
+        self.ev.calculate(coeff, self.x_local)
+        fit_local_points = self.ev.points.copy()
+
+        delta = self.lat_ctrl.step(coeff, ego.vx)
+        lookahead_x = self.lat_ctrl.lookahead_x(ego.vx)
+        y_lh = _polyval_at(coeff, lookahead_x)
+
+        mode = self.decision.long_mode(t, ego, target)
+
+        ax_speed = self.long_ctrl.speed_step(self.v_des, ego.vx)
+
+        if mode == "speed":
+            ax = ax_speed
+        else:
+            gap = cos_y * (target.X - ego.X) + sin_y * (target.Y - ego.Y)
+            ax_timegap = self.long_ctrl.timegap_step(gap, ego.vx, target.vx)
+            ax = min(ax_speed, ax_timegap)
+        
+        return PipelineOutput(delta, ax, mode, coeff, fit_local_points, (lookahead_x, y_lh))
         raise NotImplementedError
